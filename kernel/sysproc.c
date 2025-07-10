@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"   // <--- 定义了 struct sysinfo
 
 uint64
 sys_exit(void)
@@ -94,4 +95,37 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+uint64
+sys_trace(void)
+{
+  int mask;
+  if(argint(0, &mask) < 0)
+    return -1;
+  myproc()->tmask = mask;
+  return 0;
+}
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 addr; // a pointer to a struct sysinfo in user space
+  struct sysinfo info;
+
+  // Get the argument from user space: a pointer to the struct.
+  if (argaddr(0, &addr) < 0) {
+    return -1;
+  }
+  
+  // Fill the kernel-space struct with information.
+  // kfree_mem_count() and proc_count() prototypes are in defs.h
+  info.freemem = kfree_mem_count();
+  info.nproc = proc_count();
+
+  // Copy the struct from kernel space to the user-space address.
+  if (copyout(myproc()->pagetable, addr, (char *)&info, sizeof(info)) < 0) {
+    return -1;
+  }
+
+  return 0;
 }
