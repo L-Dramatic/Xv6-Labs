@@ -440,3 +440,97 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+// Forward declaration for the recursive helper function.
+void vmprint_recursive(pagetable_t, int);
+
+// Print the page table of a process.
+void
+vmprint(pagetable_t pagetable)
+{
+  // Note: %p automatically adds the "0x" prefix.
+  printf("page table %p\n", pagetable);
+  vmprint_recursive(pagetable, 1);
+}
+
+// A recursive helper function for vmprint.
+void
+vmprint_recursive(pagetable_t pagetable, int level)
+{
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if(pte & PTE_V){
+      for (int j = 0; j < level; j++) {
+        printf(".. ");
+      }
+      uint64 pa = PTE2PA(pte);
+      printf("%d: pte %p pa %p\n", i, pte, pa);
+
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0){
+        vmprint_recursive((pagetable_t)pa, level + 1);
+      }
+    }
+  }
+}
+
+// Create a new kernel page table.
+//- returns a page table with the kernel text, data,
+//- and certain IO devices mapped.
+pagetable_t
+kvmcreate()
+{
+  pagetable_t kpgtbl;
+
+  kpgtbl = uvmcreate();
+  if(kpgtbl == 0)
+    return 0;
+
+  // uart registers
+  if(mappages(kpgtbl, UART0, PGSIZE, UART0, PTE_R | PTE_W) != 0)
+    goto fail;
+
+  // virtio mmio disk interface
+  if(mappages(kpgtbl, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) != 0)
+    goto fail;
+
+  // PLIC
+  if(mappages(kpgtbl, PLIC, 0x400000, PLIC, PTE_R | PTE_W) != 0)
+    goto fail;
+
+  // map kernel text executable and read-only.
+  if(mappages(kpgtbl, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X) != 0)
+    goto fail;
+
+  // map kernel data and the physical RAM we'll make use of.
+  if(mappages(kpgtbl, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W) != 0)
+    goto fail;
+
+  // map the trampoline for trap entry/exit.
+  if(mappages(kpgtbl, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) != 0)
+    goto fail;
+  
+  return kpgtbl;
+
+fail:
+  // We use freewalk here, not kvmfreewalk, because we might have allocated
+  // page-table pages but no mappings yet. freewalk is safe.
+  freewalk(kpgtbl); 
+  return 0;
+}
+// Recursively free page-table pages.
+//- Does not free leaf pages.
+void
+kvmfreewalk(pagetable_t pagetable)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      kvmfreewalk((pagetable_t)child);
+      pagetable[i] = 0;
+    }
+  }
+  kfree((void*)pagetable);
+}
