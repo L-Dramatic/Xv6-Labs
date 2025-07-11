@@ -239,7 +239,13 @@ userinit(void)
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
-  // prepare for the very first "return" from kernel to user.
+  // Sync the first page of the init process to its kernel page table.
+  // This allows the kernel to directly access this user page later.
+  if(uvmcopy_to_kpgtbl(p->kernel_pagetable, p->pagetable, 0, PGSIZE) < 0) {
+    panic("userinit: uvmcopy_to_kpgtbl failed");
+  }
+
+  // prepare for the first return from the kernel to user space.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
 
@@ -256,21 +262,50 @@ userinit(void)
 int
 growproc(int n)
 {
-  uint sz;
+  uint newsz;
   struct proc *p = myproc();
+  uint oldsz = p->sz;
 
-  sz = p->sz;
   if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+    // --- 内存增长路径 (这部分逻辑之前是正确的，保持不变) ---
+    if(oldsz + n >= PLIC)
+      return -1;
+    
+    if((newsz = uvmalloc(p->pagetable, oldsz, oldsz + n)) == 0) {
       return -1;
     }
+    
+    if(uvmcopy_to_kpgtbl(p->kernel_pagetable, p->pagetable, oldsz, newsz) < 0) {
+      uvmdealloc(p->pagetable, newsz, oldsz);
+      return -1;
+    }
+    p->sz = newsz;
+
   } else if(n < 0){
-    sz = uvmdealloc(p->pagetable, sz, sz + n);
+    // --- 内存收缩路径 (这是本次修改的核心) ---
+    
+    // 目标大小
+    uint target_sz = oldsz + n;
+
+    // 计算需要被释放的页面的起始和结束地址。
+    // uvmdealloc 内部就是这么做的，我们必须与它保持一致。
+    uint unmap_start = PGROUNDUP(target_sz);
+    uint unmap_end = PGROUNDUP(oldsz);
+
+    // 只有当起始地址小于结束地址时，才意味着有至少一个完整的页面需要被释放。
+    if(unmap_start < unmap_end){
+      uint bytes_to_unmap = unmap_end - unmap_start;
+      // 使用对齐后的地址调用 uvmunmap，这修复了 panic 的问题。
+      uvmunmap(p->kernel_pagetable, unmap_start, bytes_to_unmap / PGSIZE, 0);
+    }
+    
+    // uvmdealloc 会正确处理非对齐的 target_sz，并返回实际的新大小。
+    newsz = uvmdealloc(p->pagetable, oldsz, target_sz);
+    p->sz = newsz;
   }
-  p->sz = sz;
+  
   return 0;
 }
-
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
 int
@@ -287,6 +322,14 @@ fork(void)
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  
+   // Sync the entire user space of the new process to its kernel page table.
+  if(uvmcopy_to_kpgtbl(np->kernel_pagetable, np->pagetable, 0, p->sz) < 0){
+    proc_freepagetable(np->pagetable, p->sz);
     freeproc(np);
     release(&np->lock);
     return -1;

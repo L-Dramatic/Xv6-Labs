@@ -114,11 +114,33 @@ exec(char *path, char **argv)
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
+
+  // ------------------- 添加的代码块开始 -------------------
+  // Update the process's kernel page table to reflect the new user address space.
+  // This is the core logic for the "Simplify copyin/copyinstr" lab.
+
+  // First, unmap the entire old user address space from the kernel page table.
+  // We use oldsz, which we saved earlier.
+  if (oldsz > 0)
+    uvmunmap(p->kernel_pagetable, 0, PGROUNDUP(oldsz)/PGSIZE, 0);
   
-  // For Lab: Page tables
-if(p->pid == 1){ // <-- 添加此代码块
-  vmprint(p->pagetable);
-}
+  // Then, copy the mappings of the new user address space into the kernel page table.
+  if (uvmcopy_to_kpgtbl(p->kernel_pagetable, p->pagetable, 0, sz) < 0) {
+    // This is a critical failure. The process is now in an inconsistent state
+    // because its user page table and kernel page table are out of sync.
+    // Reverting is complex, so panicking is the safest option to prevent further issues.
+    proc_freepagetable(oldpagetable, oldsz);
+    p->pagetable = oldpagetable;
+    p->sz = oldsz;
+    panic("exec: uvmcopy_to_kpgtbl failed");
+  }
+  // ------------------- 添加的代码块结束 -------------------
+  
+  // For Lab: Page tables (保留您原有的代码)
+  if(p->pid == 1){ 
+    vmprint(p->pagetable);
+  }
+  
   proc_freepagetable(oldpagetable, oldsz);
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)

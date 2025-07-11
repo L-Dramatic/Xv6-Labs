@@ -27,7 +27,7 @@ statscopyin(char *buf, int sz) {
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
 int
-copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+copyin_new(char *dst, uint64 srcva, uint64 len)
 {
   struct proc *p = myproc();
 
@@ -43,7 +43,7 @@ copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 // until a '\0', or max.
 // Return 0 on success, -1 on error.
 int
-copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+copyinstr_new(char *dst, uint64 srcva, uint64 max)
 {
   struct proc *p = myproc();
   char *s = (char *) srcva;
