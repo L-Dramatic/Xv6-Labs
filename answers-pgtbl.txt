@@ -1,0 +1,13 @@
+Question:
+Explain why the third test srcva + len < srcva is necessary in copyin_new(): give values for srcva and len for which the first two test fail (i.e., they will not cause to return -1) but for which the third one is true (resulting in returning -1).
+
+Answer:
+The test `srcva + len < srcva` is a critical integer overflow check. Without it, a user program could provide a large `len` that, when added to `srcva`, wraps around to a small, seemingly valid address, bypassing the boundary checks.
+
+Example values assuming p->sz is 4096 (0x1000):
+- srcva = 3000
+- len = 0xFFFFFFFFFFFFF0BC (a very large number)
+
+1. `srcva >= p->sz` (3000 >= 4096) is false. Check passes.
+2. `srcva + len > p->sz`: The calculation `3000 + 0xFFFFFFFFFFFFF0BC` overflows and results in `2000`. The check `2000 > 4096` is false. This check is bypassed.
+3. `srcva + len < srcva`: The check `2000 < 3000` is true. The overflow is correctly detected, and the function returns -1, preventing a security vulnerability.

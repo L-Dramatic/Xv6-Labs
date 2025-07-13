@@ -80,6 +80,26 @@ usertrap(void)
   if(which_dev == 2)
     yield();
 
+  // ------------------- 修改后的 Alarm 处理逻辑开始 -------------------
+  // This is the logic for test1/test2: resume interrupted code
+  
+  // Check if it's a timer interrupt, an alarm is set, the countdown is over,
+  // AND the alarm handler is not already active (to prevent re-entrancy).
+  if (which_dev == 2 && p->alarm_interval > 0 && --(p->ticks_left) == 0 && p->alarm_active == 0) {
+    
+    // 1. Mark that the alarm handler is now active.
+    p->alarm_active = 1;
+
+    // 2. Backup the current trapframe. This saves the entire context
+    //    (all registers, including the epc we want to return to later).
+    *(p->saved_trapframe) = *(p->trapframe);
+
+    // 3. Set the program counter to the user-provided handler's address.
+    //    When usertrapret() is called, it will jump to the handler.
+    p->trapframe->epc = (uint64)p->alarm_handler;
+  }
+  // ------------------- 修改后的 Alarm 处理逻辑结束 -------------------
+  
   usertrapret();
 }
 

@@ -98,6 +98,14 @@ struct proc {
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
+  
+  int alarm_interval;       // The interval for the alarm.
+  void (*alarm_handler)();   // The handler function to call.
+  int ticks_left;           // Ticks left until the next alarm.
+  
+  struct trapframe *saved_trapframe; // To save the trapframe before alarm
+  int alarm_active;                  // Flag to prevent re-entrant calls
+  
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files

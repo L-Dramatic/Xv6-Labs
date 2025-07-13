@@ -121,6 +121,7 @@ panic(char *s)
   printf("panic: ");
   printf(s);
   printf("\n");
+   backtrace();
   panicked = 1; // freeze uart output from other CPUs
   for(;;)
     ;
@@ -131,4 +132,26 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
   pr.locking = 1;
+}
+
+void
+backtrace(void)
+{
+  uint64 fp = r_fp(); // 获取当前函数的帧指针
+  uint64 stack_bottom = PGROUNDDOWN(fp); // 计算当前栈页的底部地址
+  uint64 stack_top = stack_bottom + PGSIZE; // 计算当前栈页的顶部地址
+
+  printf("backtrace:\n");
+  
+  // 循环向上遍历栈帧
+  while (fp >= stack_bottom && fp < stack_top) {
+    // 1. 打印当前栈帧保存的返回地址
+    //    返回地址存储在相对于帧指针 -8 的位置
+    uint64 ra = *(uint64*)(fp - 8);
+    printf("%p\n", ra);
+
+    // 2. 获取上一层函数的帧指针，以便下一次循环
+    //    上一层帧指针存储在相对于当前帧指针 -16 的位置
+    fp = *(uint64*)(fp - 16);
+  }
 }

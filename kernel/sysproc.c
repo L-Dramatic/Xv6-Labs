@@ -57,6 +57,8 @@ sys_sleep(void)
 {
   int n;
   uint ticks0;
+  
+   backtrace();
 
   if(argint(0, &n) < 0)
     return -1;
@@ -94,4 +96,42 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+// Set an alarm for the current process.
+uint64
+sys_sigalarm(void)
+{
+  int interval;
+  uint64 handler_addr;
+  struct proc *p = myproc();
+
+  // Get arguments from user space
+  if (argint(0, &interval) < 0 || argaddr(1, &handler_addr) < 0) {
+    return -1;
+  }
+
+  // Store them in the process structure
+  p->alarm_interval = interval;
+  p->alarm_handler = (void (*)())handler_addr;
+  p->ticks_left = interval; // Initialize the countdown
+
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  
+  // 1. 从备份中恢复 trapframe (恢复现场)
+  *(p->trapframe) = *(p->saved_trapframe);
+
+  // 2. 重置 alarm 倒计时
+  p->ticks_left = p->alarm_interval;
+
+  // 3. 解除 alarm 的激活状态
+  p->alarm_active = 0;
+
+  return 0; // The return value doesn't matter much.
 }
