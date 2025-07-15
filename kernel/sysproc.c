@@ -41,17 +41,29 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  int addr;
   int n;
+  uint64 addr;
+  struct proc *p = myproc();
 
   if(argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+
+  addr = p->sz;
+  if(n > 0) {
+    // Lazy allocation for growth
+    // Just increase the size, the page fault handler will do the rest.
+    p->sz += n;
+  } else if (n < 0) {
+    // For shrinking, we must deallocate pages.
+    // We can reuse growproc for this.
+    if(growproc(n) < 0) {
+        return -1;
+    }
+  }
+  
+  // if n == 0, just return the current size.
   return addr;
 }
-
 uint64
 sys_sleep(void)
 {

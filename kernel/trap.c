@@ -52,27 +52,52 @@ usertrap(void)
   
   if(r_scause() == 8){
     // system call
-
     if(p->killed)
       exit(-1);
-
-    // sepc points to the ecall instruction,
-    // but we want to return to the next instruction.
     p->trapframe->epc += 4;
-
-    // an interrupt will change sstatus &c registers,
-    // so don't enable until done with those registers.
     intr_on();
-
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+  // --- 优化和重构后的页错误处理逻辑 ---
+  else if (r_scause() == 13 || r_scause() == 15) {
+    uint64 va = r_stval();
+    char *mem;
+
+    // 检查地址是否在进程的合法堆空间之上。
+    // 任何高于 p->sz 的地址都是非法的。
+    // 这也隐式地处理了栈下方的非法访问，因为栈在更高地址。
+    if (va >= p->sz) {
+      p->killed = 1;
+      goto kill_process; // 使用 goto 跳转到统一的清理和退出逻辑
+    }
+    
+    // 地址在 [0, p->sz) 范围内，是合法的懒惰分配请求。
+    va = PGROUNDDOWN(va);
+    mem = kalloc();
+    if (mem == 0) {
+      // 内存不足
+      p->killed = 1;
+      goto kill_process;
+    }
+    
+    memset(mem, 0, PGSIZE);
+    
+    if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U) != 0) {
+      kfree(mem);
+      p->killed = 1;
+      // 这里不用 goto，因为 p->killed 已经被设置了
+    }
+  }
+  // --- 结束 ---
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+kill_process: // 统一的进程清理和退出标签
   if(p->killed)
     exit(-1);
 
@@ -82,7 +107,6 @@ usertrap(void)
 
   usertrapret();
 }
-
 //
 // return to user space
 //

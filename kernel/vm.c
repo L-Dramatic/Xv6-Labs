@@ -5,7 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-
+#include "spinlock.h"
+#include "proc.h"
 /*
  * the kernel's page table.
  */
@@ -180,12 +181,16 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    // 修改 walk 的第三个参数为 0 (不创建新页)
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      continue; // <-- 如果页不存在，直接跳过，而不是 panic
+
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      continue; // <-- 如果页无效，也直接跳过
+
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
+      
     if(do_free){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
@@ -314,10 +319,15 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
+    // --- 这是核心修改 ---
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      // panic("uvmcopy: pte should exist"); // <-- 注释掉或删除这一行！
+      continue; // <-- 如果连页目录都不存在，直接跳过这一页
+
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      // panic("uvmcopy: page not present"); // <-- 你上一步已经修改了这里
+      continue; // <-- 如果页无效，也跳过
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -348,8 +358,10 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+// In kernel/vm.c
+
 // Copy from kernel to user.
-// Copy len bytes from src to virtual address dstva in a given page table.
+// Copy len bytes from src in kernel space to dstva in user virtual space.
 // Return 0 on success, -1 on error.
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
@@ -372,9 +384,13 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   }
   return 0;
 }
-
 // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.
+// Return 0 on success, -1 on error.
+// In kernel/vm.c
+
+// Copy from user to kernel.
+// Copy len bytes from srcva in user virtual space to dst in kernel space.
 // Return 0 on success, -1 on error.
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
@@ -397,7 +413,6 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
   }
   return 0;
 }
-
 // Copy a null-terminated string from user to kernel.
 // Copy bytes to dst from virtual address srcva in a given page table,
 // until a '\0', or max.
