@@ -22,17 +22,43 @@ barrier_init(void)
   bstate.nthread = 0;
 }
 
-static void 
+static void
 barrier()
 {
-  // YOUR CODE HERE
-  //
-  // Block until all threads have called barrier() and
-  // then increment bstate.round.
-  //
-  
-}
+  // The mutex protect the struct barrier's fields.
+  pthread_mutex_lock(&bstate.barrier_mutex);
 
+  // Record the current round number for this thread.
+  int my_round = bstate.round;
+
+  // Increment the count of threads that have reached the barrier in this round.
+  bstate.nthread++;
+
+  if (bstate.nthread == nthread) {
+    // This is the last thread to arrive in this round.
+    
+    // Reset the counter for the next round.
+    bstate.nthread = 0;
+    
+    // Start the next round.
+    bstate.round++;
+    
+    // Wake up all other threads that are waiting on the condition variable.
+    pthread_cond_broadcast(&bstate.barrier_cond);
+
+  } else {
+    // This is not the last thread.
+    // We must wait until the last thread arrives and broadcasts.
+    // We use a `while` loop to guard against spurious wakeups.
+    // The thread will wait as long as the round has not changed.
+    while (my_round == bstate.round) {
+      pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
+    }
+  }
+
+  // Release the mutex.
+  pthread_mutex_unlock(&bstate.barrier_mutex);
+}
 static void *
 thread(void *xa)
 {

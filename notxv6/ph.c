@@ -5,7 +5,7 @@
 #include <pthread.h>
 #include <sys/time.h>
 
-#define NBUCKET 5
+#define NBUCKET 128
 #define NKEYS 100000
 
 struct entry {
@@ -14,6 +14,7 @@ struct entry {
   struct entry *next;
 };
 struct entry *table[NBUCKET];
+pthread_mutex_t locks[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
@@ -40,6 +41,9 @@ void put(int key, int value)
 {
   int i = key % NBUCKET;
 
+  // Acquire the lock for the specific bucket.
+  pthread_mutex_lock(&locks[i]); // <-- MODIFIED LINE
+
   // is the key already present?
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
@@ -53,22 +57,28 @@ void put(int key, int value)
     // the new is new.
     insert(key, value, &table[i], table[i]);
   }
-}
 
+  // Release the lock for the specific bucket.
+  pthread_mutex_unlock(&locks[i]); // <-- MODIFIED LINE
+}
 static struct entry*
 get(int key)
 {
   int i = key % NBUCKET;
 
+  // Acquire the lock for the specific bucket.
+  pthread_mutex_lock(&locks[i]); // <-- MODIFIED LINE
 
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
     if (e->key == key) break;
   }
 
+  // Release the lock for the specific bucket.
+  pthread_mutex_unlock(&locks[i]); // <-- MODIFIED LINE
+
   return e;
 }
-
 static void *
 put_thread(void *xa)
 {
@@ -95,7 +105,6 @@ get_thread(void *xa)
   printf("%d: %d keys missing\n", n, missing);
   return NULL;
 }
-
 int
 main(int argc, char *argv[])
 {
@@ -116,6 +125,14 @@ main(int argc, char *argv[])
   }
 
   //
+  // Initialize all locks in the array, one for each bucket.
+  //
+  // pthread_mutex_init(&lock, NULL); // <-- REMOVE or COMMENT OUT this line.
+  for (int i = 0; i < NBUCKET; i++) { // <-- ADD THIS LOOP.
+      pthread_mutex_init(&locks[i], NULL);
+  }
+
+  //
   // first the puts
   //
   t0 = now();
@@ -129,6 +146,12 @@ main(int argc, char *argv[])
 
   printf("%d puts, %.3f seconds, %.0f puts/second\n",
          NKEYS, t1 - t0, NKEYS / (t1 - t0));
+  
+  // check for missing keys
+  for (int i = 0; i < NKEYS; i++) {
+    if (get(keys[i]) == 0)
+      printf("oops: get(%d) failed\n", keys[i]);
+  }
 
   //
   // now the gets
@@ -144,4 +167,7 @@ main(int argc, char *argv[])
 
   printf("%d gets, %.3f seconds, %.0f gets/second\n",
          NKEYS*nthread, t1 - t0, (NKEYS*nthread) / (t1 - t0));
+  
+  free(tha);
+  return 0;
 }

@@ -1,0 +1,12 @@
+The reason for missing keys with multiple threads is a race condition in the `insert()` function, which is not atomic. Here is a sequence of events with two threads (T1 and T2) that leads to a missing key:
+
+ Suppose both T1 and T2 want to insert new entries (E1 and E2) into the same empty bucket `table[i]`.
+
+ 1. T1 executes `e->next = table[i];`. At this point, `table[i]` is NULL, so `E1->next` becomes NULL.
+ 2. The scheduler switches to T2 before T1 can update `table[i]`.
+ 3. T2 executes `e->next = table[i];`. `table[i]` is still NULL, so `E2->next` also becomes NULL.
+ 4. T2 then executes `table[i] = e;` (where `e` is E2). Now, `table[i]` points to E2.
+ 5. The scheduler switches back to T1.
+ 6. T1 resumes and executes `table[i] = e;` (where `e` is E1). Now, `table[i]` points to E1.
+
+ The final result is that the entry E2, which was previously pointed to by `table[i]`, is now lost. The pointer to E2 was overwritten by T1's write operation.

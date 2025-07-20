@@ -11,10 +11,29 @@
 #define MAX_THREAD  4
 
 
+struct context {
+  uint64 ra;
+  uint64 sp;
+
+  // callee-saved
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
+
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
-
+  struct context context;
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
@@ -32,41 +51,47 @@ thread_init(void)
   current_thread->state = RUNNING;
 }
 
-void 
+void
 thread_schedule(void)
 {
   struct thread *t, *next_thread;
 
   /* Find another runnable thread. */
   next_thread = 0;
-  t = current_thread + 1;
-  for(int i = 0; i < MAX_THREAD; i++){
-    if(t >= all_thread + MAX_THREAD)
-      t = all_thread;
-    if(t->state == RUNNABLE) {
-      next_thread = t;
+  // We need to start searching from the thread *after* the current one.
+  // The original thread that starts the scheduler is also in all_thread[0].
+  int current_idx = current_thread - all_thread;
+  for (int i = 1; i < MAX_THREAD + 1; i++) {
+    int idx = (current_idx + i) % MAX_THREAD;
+    if (all_thread[idx].state == RUNNABLE) {
+      next_thread = &all_thread[idx];
       break;
     }
-    t = t + 1;
   }
 
-  if (next_thread == 0) {
-    printf("thread_schedule: no runnable threads\n");
-    exit(-1);
-  }
-
-  if (current_thread != next_thread) {         /* switch threads?  */
+  // If we found a new thread to run, switch to it.
+  if (next_thread) {
+    // Change the new thread's state to RUNNING
     next_thread->state = RUNNING;
+    
+    // Save the old thread's pointer
     t = current_thread;
+    
+    // Update the global current_thread pointer
     current_thread = next_thread;
-    /* YOUR CODE HERE
-     * Invoke thread_switch to switch from t to next_thread:
-     * thread_switch(??, ??);
-     */
-  } else
-    next_thread = 0;
+    
+    // Switch context
+    thread_switch((uint64)&t->context, (uint64)&next_thread->context);
+  } else if (current_thread->state == FREE) {
+    // If there are no runnable threads and the current one is done, exit.
+    // This is the normal exit path when all threads have finished.
+    printf("thread_schedule: no runnable threads\n");
+    exit(0);
+  }
+  // If there are no other runnable threads but the current one is still
+  // running (not FREE or RUNNABLE), just let it continue. This case
+  // is rare in this lab but is good for robustness.
 }
-
 void 
 thread_create(void (*func)())
 {
@@ -77,6 +102,10 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+    // Set the return address to the thread's entry function.
+  t->context.ra = (uint64)func;
+  // Set the stack pointer to the top of the thread's stack.
+  t->context.sp = (uint64)t->stack + STACK_SIZE;
 }
 
 void 
