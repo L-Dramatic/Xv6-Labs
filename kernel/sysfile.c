@@ -290,7 +290,7 @@ sys_open(void)
   int fd, omode;
   struct file *f;
   struct inode *ip;
-  int n;
+  int n, depth = 0;
 
   if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
     return -1;
@@ -304,11 +304,31 @@ sys_open(void)
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
+    while(1){
+      if((ip = namei(path)) == 0){
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+
+      if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+        if(++depth > 10){
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        /* 读出符号链接的目标路径 */
+        if(readi(ip, 0, (uint64)path, 0, MAXPATH) <= 0){
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        iunlockput(ip);          // 继续下一轮
+      } else {
+        break;                   // 找到普通文件或目录
+      }
     }
-    ilock(ip);
+
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -323,8 +343,7 @@ sys_open(void)
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
-    if(f)
-      fileclose(f);
+    if(f) fileclose(f);
     iunlockput(ip);
     end_op();
     return -1;
@@ -341,15 +360,14 @@ sys_open(void)
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
-  if((omode & O_TRUNC) && ip->type == T_FILE){
+  if((omode & O_TRUNC) && ip->type == T_FILE)
     itrunc(ip);
-  }
 
   iunlock(ip);
   end_op();
-
   return fd;
 }
+
 
 uint64
 sys_mkdir(void)
@@ -482,5 +500,34 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+//xiu
+// 创建符号链接：symlink(target, path)
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  // 创建类型为 T_SYMLINK 的新 inode
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  // 把目标路径写进 inode 数据块
+  if(writei(ip, 0, (uint64)target, 0, strlen(target)+1) < 0){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  iunlockput(ip);
+  end_op();
   return 0;
 }
