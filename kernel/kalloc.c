@@ -1,3 +1,5 @@
+// kernel/kalloc.c
+
 // Physical memory allocator, for user processes,
 // kernel stacks, page-table pages,
 // and pipe buffers. Allocates whole 4096-byte pages.
@@ -18,17 +20,34 @@ struct run {
   struct run *next;
 };
 
+// Per-CPU free list structure
 struct {
-  struct spinlock lock;
-  struct run *freelist;
+  struct {
+    struct spinlock lock;
+    struct run *freelist;
+  } cpu[NCPU];
 } kmem;
 
+// This function is now only for initializing locks
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  char lock_name[16];
+  for (int i = 0; i < NCPU; i++) {
+    // Each lock gets a unique name, e.g., "kmem_0", "kmem_1"
+    snprintf(lock_name, sizeof(lock_name), "kmem_%d", i);
+    initlock(&kmem.cpu[i].lock, lock_name);
+  }
+}
+
+// This is the new entry point for initialization from main.c
+void
+kmeminit()
+{
+  kinit();
   freerange(end, (void*)PHYSTOP);
 }
+
 
 void
 freerange(void *pa_start, void *pa_end)
@@ -39,10 +58,7 @@ freerange(void *pa_start, void *pa_end)
     kfree(p);
 }
 
-// Free the page of physical memory pointed at by v,
-// which normally should have been returned by a
-// call to kalloc().  (The exception is when
-// initializing the allocator; see kinit above.)
+
 void
 kfree(void *pa)
 {
@@ -56,27 +72,65 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  // Get current CPU ID safely
+  push_off();
+  int cid = cpuid();
+  pop_off();
+  
+  // Add the page to the current CPU's free list
+  acquire(&kmem.cpu[cid].lock);
+  r->next = kmem.cpu[cid].freelist;
+  kmem.cpu[cid].freelist = r;
+  release(&kmem.cpu[cid].lock);
 }
 
-// Allocate one 4096-byte page of physical memory.
-// Returns a pointer that the kernel can use.
-// Returns 0 if the memory cannot be allocated.
+
+// 在 kernel/kalloc.c 中替换 kalloc 函数
+
 void *
 kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  // Get current CPU ID safely
+  push_off();
+  int cid = cpuid();
+  pop_off();
 
-  if(r)
-    memset((char*)r, 5, PGSIZE); // fill with junk
+  // 1. Try to allocate from local CPU's free list (fast path)
+  acquire(&kmem.cpu[cid].lock);
+  r = kmem.cpu[cid].freelist;
+  if(r) {
+    kmem.cpu[cid].freelist = r->next;
+  }
+  release(&kmem.cpu[cid].lock);
+
+  // 2. If local list was empty, try to steal from other CPUs (slow path)
+  if(!r) {
+    for(int i = 0; i < NCPU; i++) {
+      if(i == cid) {
+        continue;
+      }
+      
+      acquire(&kmem.cpu[i].lock);
+      r = kmem.cpu[i].freelist;
+      if(r) {
+        // We found a page to steal. Take it.
+        kmem.cpu[i].freelist = r->next;
+        release(&kmem.cpu[i].lock);
+        // We successfully stole a page, so immediately stop searching.
+        goto found; 
+      }
+      release(&kmem.cpu[i].lock);
+    }
+  }
+
+found:
+  if(r) {
+    // Fill with junk *after* we have definitively acquired the page
+    // and are no longer holding any other CPU's lock.
+    memset((char*)r, 5, PGSIZE);
+  }
+    
   return (void*)r;
 }

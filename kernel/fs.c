@@ -96,7 +96,7 @@ bfree(int dev, uint b)
   bi = b % BPB;
   m = 1 << (bi % 8);
   if((bp->data[bi/8] & m) == 0)
-    panic("freeing free block");
+      panic("bfree: block out of bounds");
   bp->data[bi/8] &= ~m;
   log_write(bp);
   brelse(bp);
