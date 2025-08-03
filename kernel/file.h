@@ -1,3 +1,6 @@
+#include "sleeplock.h"
+#include "fs.h"
+
 struct file {
   enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
   int ref; // reference count
@@ -20,7 +23,6 @@ struct inode {
   int ref;            // Reference count
   struct sleeplock lock; // protects everything below here
   int valid;          // inode has been read from disk?
-
   short type;         // copy of disk inode
   short major;
   short minor;
@@ -29,7 +31,7 @@ struct inode {
   uint addrs[NDIRECT+1];
 };
 
-// map major device number to device functions.
+
 struct devsw {
   int (*read)(int, uint64, int);
   int (*write)(int, uint64, int);

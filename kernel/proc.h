@@ -1,4 +1,4 @@
-// Saved registers for kernel context switches.
+#define NVMA 16
 struct context {
   uint64 ra;
   uint64 sp;
@@ -18,7 +18,7 @@ struct context {
   uint64 s11;
 };
 
-// Per-CPU state.
+
 struct cpu {
   struct proc *proc;          // The process running on this cpu, or null.
   struct context context;     // swtch() here to enter scheduler().
@@ -82,6 +82,19 @@ struct trapframe {
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+
+
+struct vma {
+  int used;          
+  uint64 addr;     
+  int length;        
+  int prot;           
+  int flags;        
+  struct file *file;  
+  int offset;         
+};
+
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -103,4 +116,7 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  
+  //xiu
+  struct vma vma[NVMA];  // 虚拟内存区域
 };

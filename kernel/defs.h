@@ -183,5 +183,10 @@ void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
 
+//mmap.c
+uint64          sys_mmap(void);
+uint64          sys_munmap(void);
+
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
