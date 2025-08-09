@@ -1,0 +1,65 @@
+第一个问题 (from "Print a page table")
+Question: Explain the output of vmprint in terms of Fig 3-4 from the text. What does page 0 contain? What is in page 2? When running in user mode, could the process read/write the memory mapped by page 1?
+回答:
+vmprint 的输出是 xv6 中 init 进程在 exec() 刚刚完成后的页表快照，它直观地展示了 RISC-V 的三级页表结构，与 xv6 book 中的 Figure 3-4 所描绘的内存布局完全对应。
+page 0 (虚拟地址 0x0000 - 0x1000):
+作用: 这个页面包含了 init 进程的用户代码和数据。exec() 系统调用会将 initcode (一个非常小的启动程序) 的二进制内容加载到这个物理页，并将其映射到用户空间的起始虚拟地址 0。
+PTE 权限: 它的 PTE (Page Table Entry) 包含了 PTE_V (Valid), PTE_R (Read), PTE_W (Write), PTE_X (Execute), 和 PTE_U (User) 标志位。这使得进程在用户模式下可以对这个页面进行读、写和执行操作。
+page 2 (虚拟地址 0x2000):
+作用: 这个页面没有被 exec 显式映射。从 vmprint 的输出中我们可以看到，虚拟地址 0x1000 (page 1) 之后，直接跳到了更高的地址（如 trapframe 和 trampoline）。因此，虚拟地址 0x2000 (page 2) 根本没有被映射。
+如果访问会发生什么: 如果 init 进程试图访问这个地址，MMU（内存管理单元）在遍历页表时会发现一个无效的 PTE（PTE_V 位为0）。这将触发一个缺页异常 (page fault)，控制权会转移到内核的陷阱处理程序。由于这个地址不在进程合法的内存区域内（p->sz），内核会认为这是一次非法的内存访问，并终止该进程。
+page 1 (虚拟地址 0x1000 - 0x2000):
+作用: 这个页面被用作 init 进程的用户栈 (user stack)。exec() 会分配一个物理页，并将其映射到用户代码之上，作为初始的栈空间。init 进程的所有局部变量、函数调用参数和返回地址都存放在这里。
+PTE 权限: 它的 PTE 包含了 PTE_V, PTE_R, PTE_W, 和 PTE_U 标志位。
+能否读写: 是的，进程在用户模式下可以对 page 1 进行读写操作，因为它有 PTE_R 和 PTE_W 权限，并且 PTE_U 标志位允许用户态访问。但是，它不能执行这个页面上的指令，因为它没有 PTE_X 标志位。这是一个典型的栈页面的权限设置，可以防止恶意代码在栈上执行（一种常见的安全攻击）。
+第二个问题 (from "Simplify copyin/copyinstr")
+Question: Explain why the third test srcva + len < srcva is necessary in copyin_new(): give values for srcva and len for which the first two test fail (i.e., they will not cause to return -1) but for which the third one is true (resulting in returning -1).
+回答:
+copyin_new() 中的第三个测试 srcva + len < srcva 是为了防止整数溢出 (integer overflow) 攻击或错误。
+在64位系统中，uint64 类型的最大值是 2^64 - 1。如果一个非常大的 srcva 加上一个 len，它们的和可能会超过这个最大值，发生回绕 (wrap-around)，变成一个非常小的数。
+copyin_new() 的前两个测试是：
+srcva >= p->sz: 检查起始地址是否在用户进程的合法内存范围内。
+srcva+len > p->sz: 检查结束地址是否在用户进程的合法内存范围内。
+一个能通过前两个测试，但被第三个测试捕获的例子如下：
+假设一个进程的内存大小 p->sz 是 0x1000。
+设置 srcva:
+我们选择一个非常接近 uint64 最大值的 srcva。例如：
+srcva = 0xFFFFFFFFFFFFF000 (这是一个非常大的地址，但小于 p->sz 的条件 srcva >= p->sz 是不成立的，这里假设 p->sz 很大，比如 0x80000000。为了简化，我们假设 p->sz 很大，srcva 是一个合法的起始地址)。
+为了让例子更清晰，我们假设 p->sz 是 0x80000000。
+我们选择 srcva = 0x70000000。
+设置 len:
+我们选择一个巨大的 len，使得 srcva + len 发生溢出。例如：
+len = 0xFFFFFFFFFFFFF100
+现在我们来分析这三个测试：
+第一个测试: srcva >= p->sz
+0x70000000 >= 0x80000000 是假 (false)。测试通过。
+计算 srcva + len:
+0x70000000 + 0xFFFFFFFFFFFFF100。这个加法会超出 uint64 的表示范围。
+在 uint64 算术中，这个结果会是 0x70000000 - 0x10000000000000000 + 0xFFFFFFFFFFFFF100 = 0x6FFFF100 (这是一个简化的计算，实际结果会是 (srcva + len) % 2^64)。
+实际的 uint64 溢出计算结果是 0x70000000 + 0xFFFFFFFFFFFFF100 = 0x1000000006FFFFF100，取低64位是 0x06FFFFF100，但为了说明目的，我们假设结果是 0x6FFFF100。
+让我们选一个更容易计算的例子：
+假设 p->sz = 0x80000000。
+srcva = 0x7FFFFFFF
+len = 0xFFFFFFFF
+srcva >= p->sz: 0x7FFFFFFF >= 0x80000000 是假。测试通过。
+srcva + len: 0x7FFFFFFF + 0xFFFFFFFF = 0x17FFFFFFFE。取低64位还是 0x17FFFFFFFE。这个例子不好。
+换一个更容易理解的例子:
+假设 p->sz = 0xA000。
+srcva = 0xFFFFFFFFFFFFFFF0 (一个非常接近 uint64 尽头的地址)。
+len = 0x20 (一个正数)。
+第一个测试: srcva >= p->sz
+0xFFFFFFFFFFFFFFF0 >= 0xA000 是 真 (true)。这个测试会失败。所以这个例子也不好。
+正确的例子:
+假设 p->sz = 0x80000000 (一个很大的用户空间)。
+srcva = 0x70000000 (一个合法的起始地址)。
+len = 0xA0000000 (一个很大的长度)。
+第一个测试: srcva >= p->sz
+0x70000000 >= 0x80000000 是 假 (false)。测试通过。
+第二个测试: srcva+len > p->sz
+srcva + len = 0x70000000 + 0xA0000000 = 0x110000000。
+在 uint64 中，这个加法会溢出，结果是 0x10000000。
+0x10000000 > 0x80000000 是 假 (false)。第二个测试也被绕过了！
+第三个测试: srcva + len < srcva
+我们已经计算出 srcva + len 的溢出结果是 0x10000000。
+0x10000000 < 0x70000000 是 真 (true)。
+第三个测试成功捕获了这次溢出，并返回 -1，阻止了一次潜在的内核漏洞。
